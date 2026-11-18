@@ -643,47 +643,85 @@ document.getElementById('modalConfirm').classList.remove('hidden');
 function tutupModal() {
 document.getElementById('modalConfirm').classList.add('hidden');
 }
+
 async function submitJawabanAkhir(autoSubmit) {
-if (sedangMengirim) return;
-if (ujianTerkunci && !autoSubmit) return;
-sedangMengirim = true;
-const btnKirim = document.getElementById('btnConfirmKirim');
-if (btnKirim) { btnKirim.disabled = true; btnKirim.textContent = "Mengirim..."; }
-const payloadJawaban = daftarSoal.map(function(s, i) {
-const no = getNoSoal(s, i);
-return { no: no, jawab: jawabanUser[no] || "-" };
-});
-try {
-const res = await fetch(GAS_WEB_APP_URL, {
-method: 'POST',
-body: JSON.stringify({
-action: 'submit',
-idUlangan: mapelAktif.id,
-nisn: siswaAktif.nisn,
-nama: siswaAktif.nama,
-kelas: siswaAktif.kelas,
-jawaban: payloadJawaban
-})
-});
-const result = await res.json();
-tutupModal();
-if (result.status === 'success') {
-clearInterval(timerInterval);
-document.getElementById('violationOverlay').classList.add('hidden');
-document.getElementById('pageExam').classList.add('hidden');
-document.getElementById('uiTimer').classList.add('hidden');
-document.getElementById('pageFinish').classList.remove('hidden');
-} else {
-sedangMengirim = false;
-alert("Gagal menyimpan nilai: " + result.message);
-if (btnKirim) { btnKirim.disabled = false; btnKirim.textContent = "Ya, Kirim"; }
+  if (sedangMengirim) return;
+  if (ujianTerkunci && !autoSubmit) return;
+
+  // Pastikan token sesi tersedia sebelum mengirim jawaban.
+  if (!sessionTokenAktif) {
+    alert("Token sesi ujian tidak ditemukan. Silakan hubungi pengawas.");
+    return;
+  }
+
+  sedangMengirim = true;
+
+  const btnKirim = document.getElementById('btnConfirmKirim');
+  if (btnKirim) {
+    btnKirim.disabled = true;
+    btnKirim.textContent = "Mengirim...";
+  }
+
+  const payloadJawaban = daftarSoal.map(function(s, i) {
+    const no = getNoSoal(s, i);
+    return {
+      no: no,
+      jawab: jawabanUser[no] || "-"
+    };
+  });
+
+  try {
+    const res = await fetch(GAS_WEB_APP_URL, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'submit',
+        sessionToken: sessionTokenAktif, // PERBAIKAN UTAMA
+        idUlangan: mapelAktif.id,
+        nisn: siswaAktif.nisn,
+        nama: siswaAktif.nama,
+        kelas: siswaAktif.kelas,
+        jawaban: payloadJawaban
+      })
+    });
+
+    const result = await res.json();
+
+    if (result.status === 'success') {
+      clearInterval(timerInterval);
+      tutupModal();
+
+      document.getElementById('violationOverlay').classList.add('hidden');
+      document.getElementById('pageExam').classList.add('hidden');
+      document.getElementById('uiTimer').classList.add('hidden');
+      document.getElementById('pageFinish').classList.remove('hidden');
+
+      document.getElementById('finishMsg').textContent =
+        "Jawaban Anda berhasil dikirim dan tercatat di server sekolah. Terima kasih telah mengikuti ujian.";
+
+    } else {
+      sedangMengirim = false;
+      tutupModal();
+
+      alert("Gagal menyimpan nilai: " + result.message);
+
+      if (btnKirim) {
+        btnKirim.disabled = false;
+        btnKirim.textContent = "Ya, Kirim";
+      }
+    }
+
+  } catch (err) {
+    sedangMengirim = false;
+
+    alert("Terjadi gangguan jaringan saat mengirim jawaban: " + err.message);
+
+    if (btnKirim) {
+      btnKirim.disabled = false;
+      btnKirim.textContent = "Ya, Kirim";
+    }
+  }
 }
-} catch (err) {
-sedangMengirim = false;
-alert("Terjadi gangguan jaringan saat mengirim jawaban: " + err.message);
-if (btnKirim) { btnKirim.disabled = false; btnKirim.textContent = "Ya, Kirim"; }
-}
-}
+
 </script>
 </body>
 </html>
