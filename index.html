@@ -236,10 +236,11 @@
   </div>
 
 <script>
-  const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyNOuNJPzDQ8y0g4JhobxGJ_ptalpJsyR0j5RWCjKteCcFyk97bH3CawZoWdavmmYt7/exec";
+  const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwCnML_CuMW6fRpwWg6stLkUeP07n0JC-NYfKEo3BVGlC64Y6HI2OQU4NQvEgWhB_3O/exec";
   const GITHUB_DATA_URL = "https://subardi33-code.github.io/APLIKASI_SHEET/data/";
 let cacheKelas = null;
 let siswaAktif = null;
+let sessionTokenAktif = null;
 let mapelAktif = null;
 let daftarSoal = [];
 let jawabanUser = {};
@@ -361,6 +362,8 @@ btn.textContent = "MASUK UJIAN";
 return;
 }
 siswaAktif = result.data;
+sessionTokenAktif = siswaAktif.sessionToken || null;
+if (!sessionTokenAktif) throw new Error('Token sesi dari server tidak diterima. Silakan login kembali.');
 jumlahPelanggaran = Number(siswaAktif.jumlahPelanggaran) || 0;
 mapelAktif = cacheKelas.daftar.find(function(x) { return String(x.id) === String(idUlangan); });
 daftarSoal = soalMapel;
@@ -578,43 +581,51 @@ function catatPerubahanVisibilitas() {
   if (document.visibilityState === 'hidden') registerPelanggaran('PINDAH_TAB', 'Halaman ujian tidak terlihat');
 }
 async function registerPelanggaran(jenis, detail) {
-  if (!siswaAktif || !mapelAktif || ujianTerkunci || sedangMengirim) return;
+  if (!siswaAktif || !mapelAktif || ujianTerkunci || sedangMengirim || !sessionTokenAktif) return;
   const sekarang = Date.now();
   if (sekarang - waktuPelanggaranTerakhir < JEDA_PELANGGARAN_MS) return;
   waktuPelanggaranTerakhir = sekarang;
-  jumlahPelanggaran++;
-  document.getElementById('violationCount').textContent = jumlahPelanggaran;
-  const overlay = document.getElementById('violationOverlay');
-  const title = document.getElementById('violationTitle');
-  const message = document.getElementById('violationText');
-  overlay.classList.remove('hidden');
-  // Catat ke Spreadsheet. Jika jaringan gagal, peringatan lokal tetap berlaku.
   try {
-    fetch(GAS_WEB_APP_URL, {
+    const res = await fetch(GAS_WEB_APP_URL, {
       method: 'POST',
       body: JSON.stringify({
-        action: 'violation', idUlangan: mapelAktif.id,
-        nisn: siswaAktif.nisn, nama: siswaAktif.nama,
-        kelas: siswaAktif.kelas, jenis: jenis, detail: detail,
-        jumlahLokal: jumlahPelanggaran
+        action: 'violation', sessionToken: sessionTokenAktif,
+        idUlangan: mapelAktif.id, nisn: siswaAktif.nisn,
+        nama: siswaAktif.nama, kelas: siswaAktif.kelas,
+        jenis: jenis, detail: detail
       })
-    }).catch(function(err) { console.warn('Pencatatan pelanggaran gagal:', err); });
-  } catch (e) { console.warn(e); }
-  if (jumlahPelanggaran < BATAS_PELANGGARAN) {
-    title.textContent = jumlahPelanggaran === 1 ? 'PERINGATAN PERTAMA' : 'PERINGATAN KEDUA / TERAKHIR';
-    message.textContent = jumlahPelanggaran === 1
-      ? 'Anda terdeteksi meninggalkan halaman ujian atau berpindah jendela. Tetaplah pada halaman ujian. Jika terjadi lagi, Anda akan menerima peringatan terakhir.'
-      : 'Ini peringatan terakhir. Jika terjadi pelanggaran sekali lagi, ujian akan dikunci. Jawaban tetap tersimpan pada halaman ini.';
-    document.getElementById('btnLanjutPelanggaran').classList.remove('hidden');
-    document.getElementById('btnLanjutPelanggaran').textContent = 'Saya Mengerti, Lanjutkan';
-  } else {
-    ujianTerkunci = true;
-    title.textContent = 'UJIAN DIKUNCI';
-    message.textContent = 'Anda telah melakukan 3 pelanggaran. Anda tidak dapat melanjutkan atau mengubah jawaban. Jawaban akan dikirim otomatis ketika sisa waktu kurang dari 10 menit. Mohon tetap membuka halaman ujian.';
-    document.getElementById('btnLanjutPelanggaran').classList.add('hidden');
-    if (sisaDetik < 600) submitJawabanAkhir(true);
+    });
+    const result = await res.json();
+    if (result.status !== 'success') {
+      console.warn('Pencatatan pelanggaran ditolak server:', result.message);
+      return;
+    }
+    jumlahPelanggaran = Number(result.count) || jumlahPelanggaran;
+    document.getElementById('violationCount').textContent = jumlahPelanggaran;
+    const overlay = document.getElementById('violationOverlay');
+    const title = document.getElementById('violationTitle');
+    const message = document.getElementById('violationText');
+    overlay.classList.remove('hidden');
+    if (result.locked || jumlahPelanggaran >= BATAS_PELANGGARAN) {
+      ujianTerkunci = true;
+      title.textContent = 'UJIAN DIKUNCI';
+      message.textContent = 'Anda telah melakukan 3 pelanggaran. Anda tidak dapat melanjutkan atau mengubah jawaban. Jawaban akan dikirim otomatis ketika sisa waktu kurang dari 10 menit. Mohon tetap membuka halaman ujian.';
+      document.getElementById('btnLanjutPelanggaran').classList.add('hidden');
+      if (sisaDetik < 600) submitJawabanAkhir(true);
+    } else {
+      title.textContent = jumlahPelanggaran === 1 ? 'PERINGATAN PERTAMA' : 'PERINGATAN KEDUA / TERAKHIR';
+      message.textContent = jumlahPelanggaran === 1
+        ? 'Anda terdeteksi meninggalkan halaman ujian atau berpindah jendela. Tetaplah pada halaman ujian. Jika terjadi lagi, Anda akan menerima peringatan terakhir.'
+        : 'Ini peringatan terakhir. Jika terjadi pelanggaran sekali lagi, ujian akan dikunci. Jawaban tetap tersimpan pada halaman ini.';
+      document.getElementById('btnLanjutPelanggaran').classList.remove('hidden');
+      document.getElementById('btnLanjutPelanggaran').textContent = 'Saya Mengerti, Lanjutkan';
+    }
+  } catch (err) {
+    console.warn('Pencatatan pelanggaran gagal:', err);
+    // Tidak menaikkan hitungan lokal: hanya hitungan server yang dianggap sah.
   }
 }
+
 function tutupPeringatanPelanggaran() {
   if (ujianTerkunci) return;
   document.getElementById('violationOverlay').classList.add('hidden');
