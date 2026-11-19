@@ -115,6 +115,11 @@
     .violation-card { width: 100%; max-width: 440px; background: #fff; border-radius: 14px; padding: 24px; text-align: center; box-shadow: 0 18px 50px rgba(0,0,0,.25); }
     .violation-card h3 { margin: 0 0 10px; color: #991b1b; }
     .violation-count { display: inline-block; margin: 10px 0; padding: 7px 16px; border-radius: 999px; background: #fee2e2; color: #991b1b; font-weight: 700; }
+    .teacher-panel { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .essay-card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 14px 0; background: #fff; }
+    .essay-answer { white-space: pre-wrap; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin: 10px 0; }
+    .teacher-actions { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: start; }
+    @media(max-width:600px) { .teacher-actions { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -168,8 +173,31 @@
       </div>
 
       <button id="btnMasuk" class="btn btn-primary" type="button">MASUK UJIAN</button>
+      <button id="btnBukaGuru" class="btn btn-outline" style="width:100%;margin-top:10px;" type="button">LOGIN GURU / KOREKSI URAIAN</button>
     </div>
   </main>
+
+  <section id="pageTeacherLogin" class="container hidden">
+    <div class="card login-box">
+      <h2 style="margin-top:0;">Login Guru</h2>
+      <p style="color:var(--muted);font-size:.9rem;">Masukkan kata sandi guru untuk membuka panel koreksi uraian.</p>
+      <div id="teacherLoginAlert" class="alert alert-danger hidden"></div>
+      <div class="form-group"><label>Kata Sandi Guru</label><input id="inpGuruPassword" type="password" class="form-control" autocomplete="current-password" placeholder="Kata sandi guru"></div>
+      <button id="btnMasukGuru" class="btn btn-primary" type="button">MASUK PANEL GURU</button>
+      <button id="btnKembaliLogin" class="btn btn-outline" style="width:100%;margin-top:10px;" type="button">Kembali ke Login Siswa</button>
+    </div>
+  </section>
+
+  <section id="pageTeacher" class="teacher-panel hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+        <div><h2 style="margin:0;">Panel Koreksi Uraian</h2><p style="margin:5px 0 0;color:var(--muted);">Daftar jawaban yang menunggu penilaian guru.</p></div>
+        <div style="display:flex;gap:8px;"><button id="btnRefreshEssay" class="btn btn-outline" type="button">Muat Ulang</button><button id="btnKeluarGuru" class="btn btn-danger" type="button">Keluar</button></div>
+      </div>
+      <div id="teacherListInfo" style="margin-top:16px;color:var(--muted);"></div>
+      <div id="teacherEssayList"></div>
+    </div>
+  </section>
 
   <section id="pageExam" class="container hidden">
     <div class="student-bar">
@@ -236,7 +264,7 @@
   </div>
 
 <script>
-  const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxGpFrgUS10R1spkGLcQSQQ-tvY1SModfmMWvZLKahKJM3Wm5_QU1anns1Hw3BfOSBi/exec";
+  const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxyzNA95UfLfdX7Kld4ZO3SyhAkm6Z4VWvtJ_zvPqx53HcIBBDYXQwYr0fvvBGNQx5b/exec";
   const GITHUB_DATA_URL = "https://subardi33-code.github.io/APLIKASI_SHEET/data/";
 let cacheKelas = null;
 let siswaAktif = null;
@@ -252,12 +280,18 @@ let jumlahPelanggaran = 0;
 let waktuPelanggaranTerakhir = 0;
 let ujianTerkunci = false;
 let sedangMengirim = false;
+let teacherTokenAktif = null;
 const BATAS_PELANGGARAN = 3;
 const JEDA_PELANGGARAN_MS = 1500;
 document.getElementById('btnLanjutPelanggaran').addEventListener('click', tutupPeringatanPelanggaran);
 document.getElementById('selKelas').addEventListener('change', function() { muatJadwalKelas(this.value); });
 document.getElementById('selMapel').addEventListener('change', cekStatusJadwal);
 document.getElementById('btnMasuk').addEventListener('click', prosesLogin);
+document.getElementById('btnBukaGuru').addEventListener('click', function(){ document.getElementById('pageLogin').classList.add('hidden'); document.getElementById('pageTeacherLogin').classList.remove('hidden'); });
+document.getElementById('btnKembaliLogin').addEventListener('click', function(){ document.getElementById('pageTeacherLogin').classList.add('hidden'); document.getElementById('pageLogin').classList.remove('hidden'); });
+document.getElementById('btnMasukGuru').addEventListener('click', prosesLoginGuru);
+document.getElementById('btnRefreshEssay').addEventListener('click', muatDaftarUraian);
+document.getElementById('btnKeluarGuru').addEventListener('click', function(){ teacherTokenAktif=null; document.getElementById('pageTeacher').classList.add('hidden'); document.getElementById('pageLogin').classList.remove('hidden'); });
 document.getElementById('btnToggleNav').addEventListener('click', toggleDaftarSoal);
 document.getElementById('btnPrev').addEventListener('click', function() { pindahSoal(-1); });
 document.getElementById('btnRagu').addEventListener('click', toggleRagu);
@@ -457,16 +491,17 @@ function tampilkanSoal(idx) {
     opsiBox.appendChild(div);
   };
   const getOpsi = h => soal['Opsi_' + h] || soal['OPSI_' + h] || soal[h] || '';
-  if (tipe === 'PG' || tipe === 'BS') {
-    const hurufList = tipe === 'BS' ? ['A','B'] : ['A','B','C','D','E'];
+  if (tipe === 'PG' || tipe === 'BS' || tipe.indexOf('BENAR SALAH') >= 0 || tipe.indexOf('BENAR-SALAH') >= 0) {
+    const isBenarSalah = tipe === 'BS' || tipe.indexOf('BENAR SALAH') >= 0 || tipe.indexOf('BENAR-SALAH') >= 0;
+    const hurufList = isBenarSalah ? ['A','B'] : ['A','B','C','D','E'];
     hurufList.forEach(h => {
-      const isi = getOpsi(h) || (tipe === 'BS' ? (h === 'A' ? 'Benar' : 'Salah') : '');
+      const isi = getOpsi(h) || (isBenarSalah ? (h === 'A' ? 'Benar' : 'Salah') : '');
       if (!isi) return;
       buatOpsi(h, isi, jawaban === h, () => {
         jawabanUser[noSoal] = h; tampilkanSoal(idx);
       });
     });
-  } else if (tipe === 'PGK' || tipe.indexOf('PILIHAN GANDA KOMPLEKS') >= 0) {
+  } else if (tipe === 'PGK' || tipe.indexOf('PILIHAN GANDA KOMPLEKS') >= 0 || tipe.indexOf('MULTI') >= 0) {
     const terpilih = jawaban ? jawaban.split(',') : [];
     ['A','B','C','D','E'].forEach(h => {
       const isi = getOpsi(h); if (!isi) return;
@@ -477,7 +512,7 @@ function tampilkanSoal(idx) {
         tampilkanSoal(idx);
       });
     });
-  } else if (tipe === 'MENJODOHKAN' || tipe.indexOf('MCMA') >= 0) {
+  } else if (tipe.indexOf('MENJODOHKAN') >= 0 || tipe.indexOf('MATCH') >= 0 || tipe.indexOf('MCMA') >= 0) {
     const pernyataan = [];
     for (let i=1;i<=10;i++) {
       const v = soal['Pernyataan_' + i] || soal['PERNYATAAN_' + i] || soal['Kiri_' + i] || '';
@@ -503,6 +538,11 @@ function tampilkanSoal(idx) {
   } else if (tipe === 'ISIAN' || tipe.indexOf('ISIAN') >= 0) {
     const input=document.createElement('input'); input.type='text'; input.className='form-control';
     input.placeholder='Isikan jawaban Anda'; input.value=jawaban;
+    input.addEventListener('input',()=>ubahJawabanIsian(noSoal,input.value));
+    opsiBox.appendChild(input);
+  } else if (tipe.indexOf('URAIAN') >= 0 || tipe.indexOf('ESSAY') >= 0) {
+    const input=document.createElement('textarea'); input.className='form-control'; input.rows=6;
+    input.placeholder='Tuliskan jawaban uraian Anda'; input.value=jawaban; input.style.resize='vertical';
     input.addEventListener('input',()=>ubahJawabanIsian(noSoal,input.value));
     opsiBox.appendChild(input);
   } else {
@@ -643,85 +683,104 @@ document.getElementById('modalConfirm').classList.remove('hidden');
 function tutupModal() {
 document.getElementById('modalConfirm').classList.add('hidden');
 }
-
 async function submitJawabanAkhir(autoSubmit) {
-  if (sedangMengirim) return;
-  if (ujianTerkunci && !autoSubmit) return;
-
-  // Pastikan token sesi tersedia sebelum mengirim jawaban.
-  if (!sessionTokenAktif) {
-    alert("Token sesi ujian tidak ditemukan. Silakan hubungi pengawas.");
-    return;
-  }
-
-  sedangMengirim = true;
-
-  const btnKirim = document.getElementById('btnConfirmKirim');
-  if (btnKirim) {
-    btnKirim.disabled = true;
-    btnKirim.textContent = "Mengirim...";
-  }
-
-  const payloadJawaban = daftarSoal.map(function(s, i) {
-    const no = getNoSoal(s, i);
-    return {
-      no: no,
-      jawab: jawabanUser[no] || "-"
-    };
-  });
-
-  try {
-    const res = await fetch(GAS_WEB_APP_URL, {
-      method: 'POST',
-      body: JSON.stringify({
-        action: 'submit',
-        sessionToken: sessionTokenAktif, // PERBAIKAN UTAMA
-        idUlangan: mapelAktif.id,
-        nisn: siswaAktif.nisn,
-        nama: siswaAktif.nama,
-        kelas: siswaAktif.kelas,
-        jawaban: payloadJawaban
-      })
-    });
-
-    const result = await res.json();
-
-    if (result.status === 'success') {
-      clearInterval(timerInterval);
-      tutupModal();
-
-      document.getElementById('violationOverlay').classList.add('hidden');
-      document.getElementById('pageExam').classList.add('hidden');
-      document.getElementById('uiTimer').classList.add('hidden');
-      document.getElementById('pageFinish').classList.remove('hidden');
-
-      document.getElementById('finishMsg').textContent =
-        "Jawaban Anda berhasil dikirim dan tercatat di server sekolah. Terima kasih telah mengikuti ujian.";
-
-    } else {
-      sedangMengirim = false;
-      tutupModal();
-
-      alert("Gagal menyimpan nilai: " + result.message);
-
-      if (btnKirim) {
-        btnKirim.disabled = false;
-        btnKirim.textContent = "Ya, Kirim";
-      }
-    }
-
-  } catch (err) {
-    sedangMengirim = false;
-
-    alert("Terjadi gangguan jaringan saat mengirim jawaban: " + err.message);
-
-    if (btnKirim) {
-      btnKirim.disabled = false;
-      btnKirim.textContent = "Ya, Kirim";
-    }
-  }
+if (sedangMengirim) return;
+if (ujianTerkunci && !autoSubmit) return;
+sedangMengirim = true;
+const btnKirim = document.getElementById('btnConfirmKirim');
+if (btnKirim) { btnKirim.disabled = true; btnKirim.textContent = "Mengirim..."; }
+const payloadJawaban = daftarSoal.map(function(s, i) {
+const no = getNoSoal(s, i);
+return { no: no, jawab: jawabanUser[no] || "-" };
+});
+try {
+const res = await fetch(GAS_WEB_APP_URL, {
+method: 'POST',
+body: JSON.stringify({
+action: 'submit',
+sessionToken: sessionTokenAktif,
+idUlangan: mapelAktif.id,
+nisn: siswaAktif.nisn,
+nama: siswaAktif.nama,
+kelas: siswaAktif.kelas,
+jawaban: payloadJawaban
+})
+});
+const result = await res.json();
+tutupModal();
+if (result.status === 'success') {
+document.getElementById('finishMsg').textContent = result.message || 'Jawaban Anda berhasil disimpan.';
+clearInterval(timerInterval);
+document.getElementById('violationOverlay').classList.add('hidden');
+document.getElementById('pageExam').classList.add('hidden');
+document.getElementById('uiTimer').classList.add('hidden');
+document.getElementById('pageFinish').classList.remove('hidden');
+} else {
+sedangMengirim = false;
+alert("Gagal menyimpan nilai: " + result.message);
+if (btnKirim) { btnKirim.disabled = false; btnKirim.textContent = "Ya, Kirim"; }
 }
+} catch (err) {
+sedangMengirim = false;
+alert("Terjadi gangguan jaringan saat mengirim jawaban: " + err.message);
+if (btnKirim) { btnKirim.disabled = false; btnKirim.textContent = "Ya, Kirim"; }
+}
+ }
 
+async function panggilAPIGuru(payload) {
+  const res = await fetch(GAS_WEB_APP_URL, {method:'POST', body:JSON.stringify(payload)});
+  return await res.json();
+}
+async function prosesLoginGuru() {
+  const btn = document.getElementById('btnMasukGuru');
+  const alertBox = document.getElementById('teacherLoginAlert');
+  alertBox.classList.add('hidden');
+  btn.disabled = true; btn.textContent = 'Memverifikasi...';
+  try {
+    const result = await panggilAPIGuru({action:'teacherLogin',password:document.getElementById('inpGuruPassword').value});
+    if (result.status !== 'success') throw new Error(result.message || 'Login guru gagal.');
+    teacherTokenAktif = result.teacherToken;
+    document.getElementById('pageTeacherLogin').classList.add('hidden');
+    document.getElementById('pageTeacher').classList.remove('hidden');
+    document.getElementById('inpGuruPassword').value = '';
+    await muatDaftarUraian();
+  } catch(e) {
+    alertBox.textContent = e.message; alertBox.classList.remove('hidden');
+  } finally { btn.disabled = false; btn.textContent = 'MASUK PANEL GURU'; }
+}
+async function muatDaftarUraian() {
+  const info = document.getElementById('teacherListInfo');
+  const list = document.getElementById('teacherEssayList');
+  info.textContent = 'Memuat jawaban uraian...'; list.innerHTML = '';
+  try {
+    const result = await panggilAPIGuru({action:'teacherListEssay',teacherToken:teacherTokenAktif});
+    if (result.status !== 'success') throw new Error(result.message || 'Gagal memuat daftar.');
+    const items = result.items || [];
+    info.textContent = items.length ? items.length + ' jawaban menunggu koreksi.' : 'Tidak ada jawaban uraian yang menunggu koreksi.';
+    items.forEach(item => {
+      const card = document.createElement('div'); card.className = 'essay-card';
+      const title = document.createElement('h3'); title.textContent = item.nama + ' • Kelas ' + item.kelas + ' • ' + item.idUjian;
+      const meta = document.createElement('p'); meta.style.color = 'var(--muted)'; meta.textContent = 'Percobaan ke-' + item.percobaan + ' | Soal nomor ' + item.nomor + ' | Bobot maksimum ' + item.bobot;
+      const q = document.createElement('div'); q.innerHTML = '<strong>Pertanyaan</strong>'; const qText=document.createElement('p'); qText.textContent=item.pertanyaan; q.appendChild(qText);
+      const a = document.createElement('div'); a.innerHTML = '<strong>Jawaban siswa</strong>'; const aText=document.createElement('div'); aText.className='essay-answer'; aText.textContent=item.jawaban; a.appendChild(aText);
+      const actions = document.createElement('div'); actions.className='teacher-actions';
+      const scoreWrap=document.createElement('div'); const scoreLabel=document.createElement('label'); scoreLabel.textContent='Nilai (0–'+item.bobot+')'; const score=document.createElement('input'); score.type='number'; score.min='0'; score.max=String(item.bobot); score.step='0.01'; score.className='form-control'; score.placeholder='Nilai'; scoreWrap.append(scoreLabel,score);
+      const feedbackWrap=document.createElement('div'); const feedbackLabel=document.createElement('label'); feedbackLabel.textContent='Catatan guru (opsional)'; const feedback=document.createElement('textarea'); feedback.className='form-control'; feedback.rows=2; feedback.placeholder='Catatan koreksi'; feedbackWrap.append(feedbackLabel,feedback);
+      actions.append(scoreWrap,feedbackWrap);
+      const save=document.createElement('button'); save.type='button'; save.className='btn btn-primary'; save.style.marginTop='12px'; save.textContent='Simpan Koreksi';
+      save.addEventListener('click', async function(){
+        if(score.value==='' || Number(score.value)<0 || Number(score.value)>Number(item.bobot)){ alert('Masukkan nilai antara 0 sampai '+item.bobot+'.'); return; }
+        save.disabled=true; save.textContent='Menyimpan...';
+        try {
+          const r=await panggilAPIGuru({action:'teacherGradeEssay',teacherToken:teacherTokenAktif,essayRow:item.row,score:Number(score.value),feedback:feedback.value});
+          if(r.status!=='success') throw new Error(r.message||'Gagal menyimpan koreksi.');
+          card.remove(); info.textContent=r.message; if(!list.children.length) info.textContent='Semua jawaban yang tampil telah diproses. Muat ulang untuk memeriksa status terbaru.';
+        } catch(e){ alert(e.message); save.disabled=false; save.textContent='Simpan Koreksi'; }
+      });
+      card.append(title,meta,q,a,actions,save); list.appendChild(card);
+    });
+  } catch(e) { info.textContent=e.message; }
+}
 </script>
 </body>
 </html>
